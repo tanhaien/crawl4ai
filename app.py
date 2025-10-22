@@ -113,33 +113,7 @@ if st.button("🚀 Bắt đầu Crawl", type="primary", use_container_width=True
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Cấu hình crawler
-                if crawl_mode == "Deep Crawl (nhiều trang)":
-                    # Tạo filter chain cho deep crawl
-                    filters = []
-                    if domain_filter:
-                        filters.append(DomainFilter(allowed_domains=[domain_filter]))
-                    filters.extend([
-                        URLPatternFilter(patterns=["*"]),
-                        ContentTypeFilter(allowed_types=["text/html"])
-                    ])
-                    
-                    config = CrawlerRunConfig(
-                        deep_crawl_strategy=BFSDeepCrawlStrategy(
-                            max_depth=max_depth,
-                            include_external=include_external,
-                            max_pages=max_pages,
-                            filter_chain=FilterChain(filters) if filters else None
-                        ),
-                        scraping_strategy=LXMLWebScrapingStrategy(),
-                        verbose=False
-                    )
-                else:
-                    # Simple crawl
-                    config = CrawlerRunConfig(
-                        scraping_strategy=LXMLWebScrapingStrategy(),
-                        verbose=False
-                    )
+                # Không cần cấu hình Crawl4AI nữa - sử dụng requests trực tiếp
                 
                 # Thực hiện crawl với requests và BeautifulSoup (không cần Playwright)
                 def crawl_website():
