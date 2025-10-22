@@ -15,38 +15,8 @@ from crawl4ai.deep_crawling.filters import (
     ContentTypeFilter
 )
 
-# Function to install Playwright browsers if needed
-def ensure_playwright_browsers():
-    """Ensure Playwright browsers are installed"""
-    try:
-        # Try to import playwright and check if browsers exist
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            browser.close()
-        return True
-    except Exception as e:
-        st.warning("⚠️ Playwright browsers not found. Installing...")
-        try:
-            # Install browsers
-            result = subprocess.run([
-                sys.executable, "-m", "playwright", "install", "chromium"
-            ], capture_output=True, text=True, timeout=300)
-            
-            if result.returncode == 0:
-                st.success("✅ Playwright browsers installed successfully!")
-                return True
-            else:
-                st.error(f"❌ Failed to install browsers: {result.stderr}")
-                return False
-        except Exception as install_error:
-            st.error(f"❌ Error installing Playwright: {install_error}")
-            return False
-
-# Check and install Playwright browsers on app start
-if not ensure_playwright_browsers():
-    st.error("🚨 Cannot install Playwright browsers. Some features may not work.")
-    st.info("💡 Try refreshing the page or contact support if the issue persists.")
+# Use LXML strategy for better compatibility with Streamlit Cloud
+# Playwright requires system dependencies that aren't available on Streamlit Cloud
 
 # Cấu hình trang
 st.set_page_config(
@@ -85,6 +55,9 @@ st.markdown("""
 # Header
 st.markdown('<h1 class="main-header">🕷️ Crawl4AI Web App</h1>', unsafe_allow_html=True)
 st.markdown("### Crawl và extract dữ liệu từ bất kỳ website nào")
+
+# Info about LXML strategy
+st.info("ℹ️ **Lưu ý**: App sử dụng LXML strategy để tương thích tốt với Streamlit Cloud. Một số website phức tạp có thể cần JavaScript rendering.")
 
 # Sidebar cho cấu hình
 with st.sidebar:
@@ -175,26 +148,55 @@ if st.button("🚀 Bắt đầu Crawl", type="primary", use_container_width=True
                         verbose=False
                     )
                 
-                # Thực hiện crawl với error handling
+                # Thực hiện crawl với error handling và LXML strategy
                 async def crawl_website():
                     try:
+                        # Force LXML strategy for Streamlit Cloud compatibility
+                        lxml_config = CrawlerRunConfig(
+                            scraping_strategy=LXMLWebScrapingStrategy(),
+                            verbose=False
+                        )
+                        
+                        # Add deep crawl strategy if needed
+                        if crawl_mode == "Deep Crawl (nhiều trang)":
+                            filters = []
+                            if domain_filter:
+                                filters.append(DomainFilter(allowed_domains=[domain_filter]))
+                            filters.extend([
+                                URLPatternFilter(patterns=["*"]),
+                                ContentTypeFilter(allowed_types=["text/html"])
+                            ])
+                            
+                            lxml_config = CrawlerRunConfig(
+                                deep_crawl_strategy=BFSDeepCrawlStrategy(
+                                    max_depth=max_depth,
+                                    include_external=include_external,
+                                    max_pages=max_pages,
+                                    filter_chain=FilterChain(filters) if filters else None
+                                ),
+                                scraping_strategy=LXMLWebScrapingStrategy(),
+                                verbose=False
+                            )
+                        
                         async with AsyncWebCrawler() as crawler:
-                            results = await crawler.arun(url_input, config=config)
+                            results = await crawler.arun(url_input, config=lxml_config)
                             return results
+                            
                     except Exception as e:
                         st.error(f"❌ Crawl error: {str(e)}")
-                        # Try with simpler config if deep crawl fails
-                        if crawl_mode == "Deep Crawl (nhiều trang)":
-                            st.info("🔄 Trying with simple crawl as fallback...")
-                            simple_config = CrawlerRunConfig(
+                        # Try with even simpler config
+                        st.info("🔄 Trying with basic LXML crawl...")
+                        try:
+                            basic_config = CrawlerRunConfig(
                                 scraping_strategy=LXMLWebScrapingStrategy(),
                                 verbose=False
                             )
                             async with AsyncWebCrawler() as crawler:
-                                results = await crawler.arun(url_input, config=simple_config)
+                                results = await crawler.arun(url_input, config=basic_config)
                                 return results
-                        else:
-                            raise e
+                        except Exception as fallback_error:
+                            st.error(f"❌ Fallback also failed: {str(fallback_error)}")
+                            raise fallback_error
                 
                 # Chạy async function
                 results = asyncio.run(crawl_website())
