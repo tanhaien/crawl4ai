@@ -2,6 +2,8 @@ import streamlit as st
 import asyncio
 import json
 import io
+import subprocess
+import sys
 from datetime import datetime
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
@@ -12,6 +14,39 @@ from crawl4ai.deep_crawling.filters import (
     URLPatternFilter,
     ContentTypeFilter
 )
+
+# Function to install Playwright browsers if needed
+def ensure_playwright_browsers():
+    """Ensure Playwright browsers are installed"""
+    try:
+        # Try to import playwright and check if browsers exist
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception as e:
+        st.warning("⚠️ Playwright browsers not found. Installing...")
+        try:
+            # Install browsers
+            result = subprocess.run([
+                sys.executable, "-m", "playwright", "install", "chromium"
+            ], capture_output=True, text=True, timeout=300)
+            
+            if result.returncode == 0:
+                st.success("✅ Playwright browsers installed successfully!")
+                return True
+            else:
+                st.error(f"❌ Failed to install browsers: {result.stderr}")
+                return False
+        except Exception as install_error:
+            st.error(f"❌ Error installing Playwright: {install_error}")
+            return False
+
+# Check and install Playwright browsers on app start
+if not ensure_playwright_browsers():
+    st.error("🚨 Cannot install Playwright browsers. Some features may not work.")
+    st.info("💡 Try refreshing the page or contact support if the issue persists.")
 
 # Cấu hình trang
 st.set_page_config(
@@ -140,11 +175,26 @@ if st.button("🚀 Bắt đầu Crawl", type="primary", use_container_width=True
                         verbose=False
                     )
                 
-                # Thực hiện crawl
+                # Thực hiện crawl với error handling
                 async def crawl_website():
-                    async with AsyncWebCrawler() as crawler:
-                        results = await crawler.arun(url_input, config=config)
-                        return results
+                    try:
+                        async with AsyncWebCrawler() as crawler:
+                            results = await crawler.arun(url_input, config=config)
+                            return results
+                    except Exception as e:
+                        st.error(f"❌ Crawl error: {str(e)}")
+                        # Try with simpler config if deep crawl fails
+                        if crawl_mode == "Deep Crawl (nhiều trang)":
+                            st.info("🔄 Trying with simple crawl as fallback...")
+                            simple_config = CrawlerRunConfig(
+                                scraping_strategy=LXMLWebScrapingStrategy(),
+                                verbose=False
+                            )
+                            async with AsyncWebCrawler() as crawler:
+                                results = await crawler.arun(url_input, config=simple_config)
+                                return results
+                        else:
+                            raise e
                 
                 # Chạy async function
                 results = asyncio.run(crawl_website())
