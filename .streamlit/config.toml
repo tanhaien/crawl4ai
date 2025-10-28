@@ -1,0 +1,6 @@
+[server]
+# Tắt file watcher dựa trên watchdog để tránh inotify limit trên các môi trường giới hạn
+fileWatcherType = "poll"
+
+# Mặc định: chạy app chính là app.py ở root repo
+headless = true
