@@ -1,0 +1,5 @@
+streamlit>=1.28,<2
+aiohttp>=3.9,<4
+aiofiles>=23.2,<24
+beautifulsoup4>=4.12,<5
+tqdm>=4.66,<5

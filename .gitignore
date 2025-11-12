@@ -1,0 +1,27 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# App runtime artifacts
+runs/
+pdf_crawler.log
+pdf_crawler_progress.json
+pdf_downloads_metadata.json
+
+# Zip outputs
+*.zip
