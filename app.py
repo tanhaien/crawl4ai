@@ -29,6 +29,12 @@ def main():
     # Initialize session state for crawl results
     if 'crawl_results' not in st.session_state:
         st.session_state.crawl_results = None
+    if 'discovered_pdfs' not in st.session_state:
+        st.session_state.discovered_pdfs = []
+    if 'scan_complete' not in st.session_state:
+        st.session_state.scan_complete = False
+    if 'crawler_instance' not in st.session_state:
+        st.session_state.crawler_instance = None
     
     # URL input
     st.subheader("Nhập URLs")
@@ -67,115 +73,215 @@ def main():
             help="Thời gian chờ tối đa cho mỗi request"
         )
     
-    # Start button
-    if st.button("🚀 Bắt đầu Crawl", type="primary", use_container_width=True):
-        # Parse URLs
-        urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
-        
-        if not urls:
-            st.warning("⚠️ Vui lòng nhập ít nhất một URL")
-            return
-        
-        # Validate URLs
-        invalid_urls = []
-        valid_urls = []
-        for url in urls:
-            try:
-                parsed = urlparse(url)
-                if parsed.scheme in ('http', 'https') and parsed.netloc:
-                    valid_urls.append(url)
-                else:
+    # Phase 1: Discovery Button
+    if not st.session_state.scan_complete:
+        if st.button("🔍 Scan for PDFs (Discovery Phase)", type="primary", use_container_width=True):
+            # Parse URLs
+            urls = [url.strip() for url in urls_input.split('\n') if url.strip()]
+            
+            if not urls:
+                st.warning("⚠️ Vui lòng nhập ít nhất một URL")
+                return
+            
+            # Validate URLs
+            invalid_urls = []
+            valid_urls = []
+            for url in urls:
+                try:
+                    parsed = urlparse(url)
+                    if parsed.scheme in ('http', 'https') and parsed.netloc:
+                        valid_urls.append(url)
+                    else:
+                        invalid_urls.append(url)
+                except Exception:
                     invalid_urls.append(url)
-            except Exception:
-                invalid_urls.append(url)
-        
-        if invalid_urls:
-            st.error(f"❌ URL không hợp lệ: {', '.join(invalid_urls)}")
-            st.info("ℹ️ URL phải bắt đầu bằng http:// hoặc https://")
-            return
-        
-        urls = valid_urls
-        
-        # Update config
-        CONFIG["max_pages_per_site"] = max_pages
-        CONFIG["max_concurrent_downloads"] = max_concurrent
-        CONFIG["timeout"] = timeout
-        
-        # Create unique output directory for this run in /tmp for Streamlit Cloud
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = Path(f"/tmp/runs/run_{timestamp}")
-        output_dir = run_dir / "downloaded_pdfs"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Update CONFIG paths
-        CONFIG["output_dir"] = str(output_dir)
-        CONFIG["log_file"] = str(run_dir / "pdf_crawler.log")
-        CONFIG["metadata_file"] = str(run_dir / "pdf_downloads_metadata.json")
-        CONFIG["progress_file"] = str(run_dir / "pdf_crawler_progress.json")
-        
-        # Progress indicators using session state
-        if 'progress_bar' not in st.session_state:
-            st.session_state.progress_bar = st.progress(0)
-        if 'status_text' not in st.session_state:
-            st.session_state.status_text = st.empty()
-        
-        progress_bar = st.session_state.progress_bar
-        status_text = st.session_state.status_text
-        
-        try:
-            status_text.text("🔄 Đang khởi tạo crawler...")
-            crawler = PDFCrawler()
             
-            status_text.text(f"🔍 Đang crawl {len(urls)} site(s)...")
+            if invalid_urls:
+                st.error(f"❌ URL không hợp lệ: {', '.join(invalid_urls)}")
+                st.info("ℹ️ URL phải bắt đầu bằng http:// hoặc https://")
+                return
             
-            # Run the crawler using existing event loop
+            urls = valid_urls
+            
+            # Update config
+            CONFIG["max_pages_per_site"] = max_pages
+            CONFIG["max_concurrent_downloads"] = max_concurrent
+            CONFIG["timeout"] = timeout
+            
+            # Create unique output directory for this run in /tmp for Streamlit Cloud
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_dir = Path(f"/tmp/runs/run_{timestamp}")
+            output_dir = run_dir / "downloaded_pdfs"
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Update CONFIG paths
+            CONFIG["output_dir"] = str(output_dir)
+            CONFIG["log_file"] = str(run_dir / "pdf_crawler.log")
+            CONFIG["metadata_file"] = str(run_dir / "pdf_downloads_metadata.json")
+            CONFIG["progress_file"] = str(run_dir / "pdf_crawler_progress.json")
+            
+            # Progress indicators
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
             try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                status_text.text("🔄 Đang khởi tạo crawler...")
+                crawler = PDFCrawler()
+                
+                status_text.text(f"🔍 Đang quét {len(urls)} site(s) để tìm PDF...")
+                
+                # Run the crawler in discover mode
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                
+                result = loop.run_until_complete(crawler.run(urls, mode='discover'))
+                
+                progress_bar.progress(100)
+                status_text.text("✅ Quét hoàn thành!")
+                
+                # Store discovered PDFs in session state
+                st.session_state.discovered_pdfs = crawler.discovered_pdfs
+                st.session_state.scan_complete = True
+                st.session_state.crawler_instance = crawler
+                st.session_state.run_dir = run_dir
+                st.session_state.output_dir = output_dir
+                st.session_state.timestamp = timestamp
+                
+                # Trigger display by rerunning
+                st.rerun()
+                        
+            except Exception as e:
+                progress_bar.progress(0)
+                status_text.text("")
+                st.error(f"❌ Lỗi: {str(e)}")
+                
+                # Show log on error
+                log_file = Path(CONFIG["log_file"])
+                if log_file.exists():
+                    with st.expander("📝 Chi tiết lỗi (log)"):
+                        with open(log_file, 'r') as f:
+                            st.text(f.read())
+    
+    # Phase 2: Display discovered PDFs and Download Selected
+    if st.session_state.scan_complete and st.session_state.discovered_pdfs:
+        st.success(f"✅ Đã tìm thấy {len(st.session_state.discovered_pdfs)} file PDF!")
+        
+        st.markdown("---")
+        st.subheader("📋 Chọn PDFs để tải xuống")
+        
+        # Display table header
+        col1, col2, col3, col4 = st.columns([0.5, 3, 2, 2])
+        with col1:
+            st.markdown("**Chọn**")
+        with col2:
+            st.markdown("**Tên file**")
+        with col3:
+            st.markdown("**Domain**")
+        with col4:
+            st.markdown("**URL**")
+        
+        st.markdown("---")
+        
+        # Display PDFs with checkboxes
+        selected_pdfs = []
+        for idx, pdf in enumerate(st.session_state.discovered_pdfs):
+            col1, col2, col3, col4 = st.columns([0.5, 3, 2, 2])
+            with col1:
+                selected = st.checkbox("", key=f"pdf_{idx}", label_visibility="hidden")
+            with col2:
+                st.write(pdf['filename'])
+            with col3:
+                st.write(pdf['domain'])
+            with col4:
+                url_display = pdf['url'][:40] + "..." if len(pdf['url']) > 40 else pdf['url']
+                st.write(url_display)
             
-            loop.run_until_complete(crawler.run(urls))
-            
-            progress_bar.progress(100)
-            status_text.text("✅ Hoàn thành!")
-            
-            # Load URL mapping from metadata
-            url_mapping = {}
-            metadata_file = Path(CONFIG["metadata_file"])
-            metadata = {}
-            if metadata_file.exists():
-                with open(metadata_file, 'r') as f:
-                    metadata = json.load(f)
-                    url_mapping = metadata.get("downloaded_pdfs", {})
-            
-            # Save all results to session state
-            st.session_state.crawl_results = {
-                'metadata': crawler.metadata,
-                'failed_downloads': crawler.failed_downloads,
-                'run_dir': run_dir,
-                'output_dir': output_dir,
-                'timestamp': timestamp,
-                'url_mapping': url_mapping,
-                'metadata_file': CONFIG["metadata_file"],
-                'log_file': CONFIG["log_file"],
-                'full_metadata': metadata
-            }
-            
-            # Trigger display by rerunning
-            st.rerun()
+            if selected:
+                selected_pdfs.append(pdf)
+        
+        st.markdown("---")
+        
+        # Summary of selection
+        if selected_pdfs:
+            st.info(f"ℹ️ Đã chọn {len(selected_pdfs)} / {len(st.session_state.discovered_pdfs)} file PDF")
+        else:
+            st.warning("⚠️ Chưa chọn file nào")
+        
+        # Download selected PDFs button
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("📥 Download Selected PDFs", type="primary", use_container_width=True, disabled=len(selected_pdfs)==0):
+                # Progress indicators
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                try:
+                    status_text.text(f"🔄 Đang tải {len(selected_pdfs)} file PDF...")
                     
-        except Exception as e:
-            progress_bar.progress(0)
-            status_text.text("")
-            st.error(f"❌ Lỗi: {str(e)}")
-            
-            # Show log on error
-            log_file = Path(CONFIG["log_file"])
-            if log_file.exists():
-                with st.expander("📝 Chi tiết lỗi (log)"):
-                    with open(log_file, 'r') as f:
-                        st.text(f.read())
+                    crawler = st.session_state.crawler_instance
+                    
+                    # Run download for selected PDFs
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                    
+                    result = loop.run_until_complete(crawler.download_selected_pdfs(selected_pdfs))
+                    
+                    progress_bar.progress(100)
+                    status_text.text("✅ Tải xuống hoàn thành!")
+                    
+                    # Load URL mapping from metadata
+                    url_mapping = {}
+                    metadata_file = Path(CONFIG["metadata_file"])
+                    metadata = {}
+                    if metadata_file.exists():
+                        with open(metadata_file, 'r') as f:
+                            metadata = json.load(f)
+                            url_mapping = metadata.get("downloaded_pdfs", {})
+                    
+                    # Save all results to session state
+                    st.session_state.crawl_results = {
+                        'metadata': crawler.metadata,
+                        'failed_downloads': crawler.failed_downloads,
+                        'run_dir': st.session_state.run_dir,
+                        'output_dir': st.session_state.output_dir,
+                        'timestamp': st.session_state.timestamp,
+                        'url_mapping': url_mapping,
+                        'metadata_file': CONFIG["metadata_file"],
+                        'log_file': CONFIG["log_file"],
+                        'full_metadata': metadata
+                    }
+                    
+                    # Reset discovery state
+                    st.session_state.scan_complete = False
+                    st.session_state.discovered_pdfs = []
+                    
+                    # Trigger display by rerunning
+                    st.rerun()
+                            
+                except Exception as e:
+                    progress_bar.progress(0)
+                    status_text.text("")
+                    st.error(f"❌ Lỗi: {str(e)}")
+                    
+                    # Show log on error
+                    log_file = Path(CONFIG["log_file"])
+                    if log_file.exists():
+                        with st.expander("📝 Chi tiết lỗi (log)"):
+                            with open(log_file, 'r') as f:
+                                st.text(f.read())
+        
+        with col2:
+            if st.button("🔄 Quét lại", use_container_width=True):
+                st.session_state.scan_complete = False
+                st.session_state.discovered_pdfs = []
+                st.session_state.crawler_instance = None
+                st.rerun()
     
     # Display results if crawl has been performed
     if st.session_state.crawl_results is not None:

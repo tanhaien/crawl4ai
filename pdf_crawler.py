@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Set, Dict, List
 from urllib.parse import urljoin, urlparse
+from datetime import datetime
 import aiohttp
 import aiofiles
 from bs4 import BeautifulSoup
@@ -50,6 +51,7 @@ class PDFCrawler:
 
         self.visited_urls: Set[str] = set()
         self.downloaded_pdfs: Dict[str, str] = {}
+        self.discovered_pdfs: List[Dict] = []
         self.failed_downloads: List[Dict] = []
         self.metadata: Dict = {
             "sites_processed": 0,
@@ -247,8 +249,8 @@ class PDFCrawler:
 
         return links
 
-    async def crawl_site(self, session: aiohttp.ClientSession, start_url: str, semaphore: asyncio.Semaphore):
-        logger.info(f"Crawling site: {start_url}")
+    async def crawl_site(self, session: aiohttp.ClientSession, start_url: str, semaphore: asyncio.Semaphore, mode: str = 'discover'):
+        logger.info(f"Crawling site: {start_url} (mode: {mode})")
 
         if self.is_pdf_link(start_url):
             logger.info(f"Direct PDF link provided: {start_url}")
@@ -284,38 +286,96 @@ class PDFCrawler:
         logger.info(f"Found {len(pdf_links)} PDFs on {start_url} (crawled {pages_crawled} pages)")
         self.metadata["pdfs_found"] += len(pdf_links)
 
-        # Download PDFs with proper semaphore usage
-        download_tasks = [
-            self.download_pdf(session, pdf_url, start_url, semaphore)
-            for pdf_url in pdf_links
-        ]
+        if mode == 'discover':
+            # Discovery mode: collect metadata only, don't download
+            site_domain = urlparse(start_url).netloc.replace('www.', '')
+            for pdf_url in pdf_links:
+                pdf_filename = self.generate_filename(pdf_url)
+                self.discovered_pdfs.append({
+                    'url': pdf_url,
+                    'source_site': start_url,
+                    'filename': pdf_filename,
+                    'domain': site_domain,
+                    'discovered_at': datetime.now().isoformat()
+                })
+            logger.info(f"Discovered {len(pdf_links)} PDFs in discovery mode")
+        else:
+            # Download mode: download PDFs as before
+            download_tasks = [
+                self.download_pdf(session, pdf_url, start_url, semaphore)
+                for pdf_url in pdf_links
+            ]
 
-        if download_tasks:
-            await asyncio.gather(*download_tasks)
+            if download_tasks:
+                await asyncio.gather(*download_tasks)
 
         self.metadata["sites_processed"] += 1
         self.save_progress()
 
-    async def run(self, urls: List[str]):
-        logger.info(f"Starting PDF crawler for {len(urls)} sites")
+    async def run(self, urls: List[str], mode: str = 'discover') -> Dict:
+        logger.info(f"Starting PDF crawler for {len(urls)} sites (mode: {mode})")
 
         semaphore = asyncio.Semaphore(CONFIG["max_concurrent_downloads"])
 
-        async with aiohttp.ClientSession(headers={"User-Agent": CONFIG["user_agent"]}) as session:
+        connector = aiohttp.TCPConnector(limit=CONFIG["max_concurrent_downloads"])
+        async with aiohttp.ClientSession(
+            headers={"User-Agent": CONFIG["user_agent"]},
+            connector=connector,
+            max_line_size=16384,
+            max_field_size=16384
+        ) as session:
             tasks = []
             for url in urls:
-                tasks.append(self.crawl_site(session, url, semaphore))
+                tasks.append(self.crawl_site(session, url, semaphore, mode))
 
             for task in tqdm(asyncio.as_completed(tasks), total=len(tasks), desc="Crawling sites"):
                 await task
 
         self.save_metadata()
-        self.print_summary()
+        if mode == 'download':
+            self.print_summary()
+        
+        return self.generate_summary()
+
+    async def download_selected_pdfs(self, selected_urls: List[Dict]) -> Dict:
+        """Download only user-selected PDFs from previously discovered list"""
+        logger.info(f"Starting download of {len(selected_urls)} selected PDFs")
+        
+        semaphore = asyncio.Semaphore(CONFIG["max_concurrent_downloads"])
+        connector = aiohttp.TCPConnector(limit=CONFIG["max_concurrent_downloads"])
+        async with aiohttp.ClientSession(
+            headers={"User-Agent": CONFIG["user_agent"]},
+            connector=connector,
+            max_line_size=16384,
+            max_field_size=16384
+        ) as session:
+            download_tasks = []
+            for pdf_info in selected_urls:
+                url = pdf_info['url']
+                source = pdf_info.get('source_site', url)
+                download_tasks.append(
+                    self.download_pdf(session, url, source, semaphore)
+                )
+            
+            if download_tasks:
+                await asyncio.gather(*download_tasks)
+        
+        return self.generate_summary()
+
+    def generate_summary(self) -> Dict:
+        """Generate summary of crawler results"""
+        return {
+            "metadata": self.metadata,
+            "downloaded_pdfs": self.downloaded_pdfs,
+            "discovered_pdfs": self.discovered_pdfs,
+            "failed_downloads": self.failed_downloads
+        }
 
     def save_metadata(self):
         metadata = {
             "metadata": self.metadata,
             "downloaded_pdfs": self.downloaded_pdfs,
+            "discovered_pdfs": self.discovered_pdfs,
             "failed_downloads": self.failed_downloads
         }
 
