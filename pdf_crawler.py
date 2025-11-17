@@ -321,8 +321,8 @@ class PDFCrawler:
         async with aiohttp.ClientSession(
             headers={"User-Agent": CONFIG["user_agent"]},
             connector=connector,
-            max_line_size=16384,
-            max_field_size=16384
+            max_line_size=32768,  # Increased to 32KB
+            max_field_size=32768   # Increased to 32KB
         ) as session:
             tasks = []
             for url in urls:
@@ -346,8 +346,8 @@ class PDFCrawler:
         async with aiohttp.ClientSession(
             headers={"User-Agent": CONFIG["user_agent"]},
             connector=connector,
-            max_line_size=16384,
-            max_field_size=16384
+            max_line_size=32768,  # Increased to 32KB
+            max_field_size=32768   # Increased to 32KB
         ) as session:
             download_tasks = []
             for pdf_info in selected_urls:
