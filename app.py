@@ -267,7 +267,7 @@ def main():
 
                     col1, col2 = st.columns([0.05, 0.95])
                     with col1:
-                        if st.checkbox("", key=f"priority_{pdf_file}"):
+                        if st.checkbox("Select file", key=f"priority_{pdf_file}", label_visibility="hidden"):
                             selected_files.append(pdf_file)
                     with col2:
                         st.text(f"🎯 {pdf_file.relative_to(results['output_dir'])}")
@@ -295,7 +295,7 @@ def main():
 
                         col1, col2 = st.columns([0.05, 0.95])
                         with col1:
-                            if st.checkbox("", key=f"other_{pdf_file}_{i}"):
+                            if st.checkbox("Select file", key=f"other_{pdf_file}_{i}", label_visibility="hidden"):
                                 selected_files.append(pdf_file)
                         with col2:
                             st.text(f"📄 {pdf_file.relative_to(results['output_dir'])}")
@@ -308,49 +308,67 @@ def main():
             else:
                 st.info("ℹ️ Chưa chọn file nào")
 
-            # Download selected files button
-            col1, col2 = st.columns(2)
+            # Initialize session state for download preparation
+            if 'prepare_download' not in st.session_state:
+                st.session_state.prepare_download = False
 
-            with col1:
-                if selected_files:
-                    # Create zip for selected files
-                    selected_zip_path = results['run_dir'] / "selected_pdfs.zip"
+            # Button to prepare downloads
+            st.markdown("---")
+            if st.button("📥 Download các file đã chọn", type="primary", use_container_width=True, disabled=len(selected_files) == 0):
+                st.session_state.prepare_download = True
+                st.rerun()
 
-                    # Create temporary directory for selected files
-                    temp_selected_dir = results['run_dir'] / "temp_selected"
-                    temp_selected_dir.mkdir(exist_ok=True)
+            # Show download buttons only after user clicks "Prepare Download"
+            if st.session_state.prepare_download:
+                st.markdown("### 📦 Tải xuống")
+                
+                col1, col2 = st.columns(2)
 
-                    # Copy selected files to temp directory
-                    for pdf_file in selected_files:
-                        dest_path = temp_selected_dir / pdf_file.name
-                        shutil.copy2(pdf_file, dest_path)
+                with col1:
+                    if selected_files:
+                        # Create zip for selected files
+                        selected_zip_path = results['run_dir'] / "selected_pdfs.zip"
 
-                    # Create zip
-                    zip_directory(temp_selected_dir, selected_zip_path)
+                        # Create temporary directory for selected files
+                        temp_selected_dir = results['run_dir'] / "temp_selected"
+                        temp_selected_dir.mkdir(exist_ok=True)
 
-                    # Download button for selected files
-                    with open(selected_zip_path, 'rb') as f:
+                        # Copy selected files to temp directory
+                        for pdf_file in selected_files:
+                            dest_path = temp_selected_dir / pdf_file.name
+                            shutil.copy2(pdf_file, dest_path)
+
+                        # Create zip
+                        zip_directory(temp_selected_dir, selected_zip_path)
+
+                        # Download button for selected files
+                        with open(selected_zip_path, 'rb') as f:
+                            st.download_button(
+                                label=f"⬇️ Tải {len(selected_files)} file đã chọn",
+                                data=f,
+                                file_name=f"selected_pdfs_{results['timestamp']}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+
+                with col2:
+                    # Download all files button
+                    all_zip_path = results['run_dir'] / "all_pdfs.zip"
+                    zip_directory(results['output_dir'], all_zip_path)
+
+                    with open(all_zip_path, 'rb') as f:
                         st.download_button(
-                            label=f"⬇️ Tải {len(selected_files)} file đã chọn",
+                            label=f"⬇️ Tải tất cả ({results['metadata']['pdfs_downloaded']} PDFs)",
                             data=f,
-                            file_name=f"selected_pdfs_{results['timestamp']}.zip",
+                            file_name=f"all_pdfs_{results['timestamp']}.zip",
                             mime="application/zip",
                             use_container_width=True
                         )
-
-            with col2:
-                # Download all files button
-                all_zip_path = results['run_dir'] / "all_pdfs.zip"
-                zip_directory(results['output_dir'], all_zip_path)
-
-                with open(all_zip_path, 'rb') as f:
-                    st.download_button(
-                        label=f"⬇️ Tải tất cả ({results['metadata']['pdfs_downloaded']} PDFs)",
-                        data=f,
-                        file_name=f"all_pdfs_{results['timestamp']}.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
+                
+                # Reset button
+                if st.button("🔄 Chọn lại file", use_container_width=True):
+                    st.session_state.prepare_download = False
+                    st.rerun()
 
             # File statistics
             st.markdown("---")
