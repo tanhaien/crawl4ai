@@ -138,29 +138,135 @@ def main():
             # Download section
             if crawler.metadata['pdfs_downloaded'] > 0:
                 st.subheader("📥 Tải xuống kết quả")
-                
-                # Create zip file
-                zip_path = run_dir / "pdfs.zip"
-                status_text.text("📦 Đang đóng gói files...")
-                zip_directory(output_dir, zip_path)
-                
-                # Download button for zip
-                with open(zip_path, 'rb') as f:
-                    st.download_button(
-                        label=f"⬇️ Tải tất cả ({crawler.metadata['pdfs_downloaded']} PDFs)",
-                        data=f,
-                        file_name=f"pdfs_{timestamp}.zip",
-                        mime="application/zip",
-                        use_container_width=True
-                    )
-                
-                # Show list of downloaded files
-                with st.expander("📑 Danh sách file đã tải"):
-                    pdf_files = list(output_dir.rglob("*.pdf"))
-                    for i, pdf_file in enumerate(pdf_files[:50], 1):  # Show first 50
-                        st.text(f"{i}. {pdf_file.relative_to(output_dir)}")
-                    if len(pdf_files) > 50:
-                        st.text(f"... và {len(pdf_files) - 50} file khác")
+
+                # File search input
+                search_terms = st.text_input(
+                    "🔍 Tìm kiếm file theo tên (phân cách bằng dấu phẩy)",
+                    placeholder="Ví dụ: catalog, manual, guide...",
+                    help="Nhập các từ khóa để tìm kiếm file ưu tiên"
+                )
+
+                # Get all PDF files
+                pdf_files = list(output_dir.rglob("*.pdf"))
+                pdf_files.sort()
+
+                # Parse search terms
+                search_keywords = [term.strip().lower() for term in search_terms.split(',') if term.strip()] if search_terms else []
+
+                # Separate priority files and other files
+                priority_files = []
+                other_files = []
+
+                if search_keywords:
+                    for pdf_file in pdf_files:
+                        file_name_lower = pdf_file.name.lower()
+                        if any(keyword in file_name_lower for keyword in search_keywords):
+                            priority_files.append(pdf_file)
+                        else:
+                            other_files.append(pdf_file)
+                else:
+                    other_files = pdf_files
+
+                # Multi-select for PDF files
+                st.subheader("📑 Chọn file PDF để tải xuống")
+
+                selected_files = []
+
+                # Priority files section
+                if priority_files:
+                    st.markdown("### ⭐ File Ưu Tiên (khớp tìm kiếm)")
+                    for pdf_file in priority_files:
+                        col1, col2 = st.columns([0.05, 0.95])
+                        with col1:
+                            if st.checkbox("", key=f"priority_{pdf_file}"):
+                                selected_files.append(pdf_file)
+                        with col2:
+                            st.text(f"🎯 {pdf_file.relative_to(output_dir)}")
+
+                # Other files section
+                if other_files:
+                    if priority_files:
+                        st.markdown("### 📁 Các File Khác")
+                    else:
+                        st.markdown("### 📁 Tất Cả Các File")
+
+                    # Show files in batches to avoid UI issues
+                    batch_size = 20
+                    for i in range(0, len(other_files), batch_size):
+                        batch = other_files[i:i+batch_size]
+                        for pdf_file in batch:
+                            col1, col2 = st.columns([0.05, 0.95])
+                            with col1:
+                                if st.checkbox("", key=f"other_{pdf_file}_{i}"):
+                                    selected_files.append(pdf_file)
+                            with col2:
+                                st.text(f"📄 {pdf_file.relative_to(output_dir)}")
+
+                # Summary of selected files
+                if selected_files:
+                    st.success(f"✅ Đã chọn {len(selected_files)} file")
+                else:
+                    st.info("ℹ️ Chưa chọn file nào")
+
+                # Download selected files button
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    if selected_files:
+                        # Create zip for selected files
+                        selected_zip_path = run_dir / "selected_pdfs.zip"
+
+                        # Create temporary directory for selected files
+                        temp_selected_dir = run_dir / "temp_selected"
+                        temp_selected_dir.mkdir(exist_ok=True)
+
+                        # Copy selected files to temp directory
+                        for pdf_file in selected_files:
+                            dest_path = temp_selected_dir / pdf_file.name
+                            shutil.copy2(pdf_file, dest_path)
+
+                        # Create zip
+                        zip_directory(temp_selected_dir, selected_zip_path)
+
+                        # Download button for selected files
+                        with open(selected_zip_path, 'rb') as f:
+                            st.download_button(
+                                label=f"⬇️ Tải {len(selected_files)} file đã chọn",
+                                data=f,
+                                file_name=f"selected_pdfs_{timestamp}.zip",
+                                mime="application/zip",
+                                use_container_width=True
+                            )
+
+                with col2:
+                    # Download all files button
+                    all_zip_path = run_dir / "all_pdfs.zip"
+                    zip_directory(output_dir, all_zip_path)
+
+                    with open(all_zip_path, 'rb') as f:
+                        st.download_button(
+                            label=f"⬇️ Tải tất cả ({crawler.metadata['pdfs_downloaded']} PDFs)",
+                            data=f,
+                            file_name=f"all_pdfs_{timestamp}.zip",
+                            mime="application/zip",
+                            use_container_width=True
+                        )
+
+                # File statistics
+                st.markdown("---")
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Tổng số file", len(pdf_files))
+                with col2:
+                    if search_keywords:
+                        st.metric("File Ưu tiên", len(priority_files))
+                    else:
+                        st.metric("File Ưu tiên", "0")
+                with col3:
+                    if search_keywords:
+                        st.metric("File khác", len(other_files))
+                    else:
+                        st.metric("File khác", len(pdf_files))
             else:
                 st.warning("⚠️ Không tìm thấy PDF nào để tải xuống")
             
