@@ -5,6 +5,7 @@ from datetime import datetime
 import zipfile
 import json
 import shutil
+from urllib.parse import urlparse
 from pdf_crawler import PDFCrawler, CONFIG
 
 st.set_page_config(
@@ -71,14 +72,34 @@ def main():
             st.warning("⚠️ Vui lòng nhập ít nhất một URL")
             return
         
+        # Validate URLs
+        invalid_urls = []
+        valid_urls = []
+        for url in urls:
+            try:
+                parsed = urlparse(url)
+                if parsed.scheme in ('http', 'https') and parsed.netloc:
+                    valid_urls.append(url)
+                else:
+                    invalid_urls.append(url)
+            except Exception:
+                invalid_urls.append(url)
+        
+        if invalid_urls:
+            st.error(f"❌ URL không hợp lệ: {', '.join(invalid_urls)}")
+            st.info("ℹ️ URL phải bắt đầu bằng http:// hoặc https://")
+            return
+        
+        urls = valid_urls
+        
         # Update config
         CONFIG["max_pages_per_site"] = max_pages
         CONFIG["max_concurrent_downloads"] = max_concurrent
         CONFIG["timeout"] = timeout
         
-        # Create unique output directory for this run
+        # Create unique output directory for this run in /tmp for Streamlit Cloud
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = Path(f"runs/run_{timestamp}")
+        run_dir = Path(f"/tmp/runs/run_{timestamp}")
         output_dir = run_dir / "downloaded_pdfs"
         output_dir.mkdir(parents=True, exist_ok=True)
         
@@ -88,9 +109,14 @@ def main():
         CONFIG["metadata_file"] = str(run_dir / "pdf_downloads_metadata.json")
         CONFIG["progress_file"] = str(run_dir / "pdf_crawler_progress.json")
         
-        # Progress indicators
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+        # Progress indicators using session state
+        if 'progress_bar' not in st.session_state:
+            st.session_state.progress_bar = st.progress(0)
+        if 'status_text' not in st.session_state:
+            st.session_state.status_text = st.empty()
+        
+        progress_bar = st.session_state.progress_bar
+        status_text = st.session_state.status_text
         
         try:
             status_text.text("🔄 Đang khởi tạo crawler...")
@@ -98,11 +124,14 @@ def main():
             
             status_text.text(f"🔍 Đang crawl {len(urls)} site(s)...")
             
-            # Run the crawler
-            async def run_crawler():
-                await crawler.run(urls)
+            # Run the crawler using existing event loop
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
             
-            asyncio.run(run_crawler())
+            loop.run_until_complete(crawler.run(urls))
             
             progress_bar.progress(100)
             status_text.text("✅ Hoàn thành!")
@@ -127,12 +156,17 @@ def main():
                     for fail in crawler.failed_downloads[:10]:  # Show first 10
                         st.text(f"• {fail['url']}\n  Lỗi: {fail['error']}")
             
+            # Load URL mapping from metadata
+            url_mapping = {}
+            metadata_file = Path(CONFIG["metadata_file"])
+            if metadata_file.exists():
+                with open(metadata_file, 'r') as f:
+                    metadata = json.load(f)
+                    url_mapping = metadata.get("downloaded_pdfs", {})
+
             # Metadata display
             with st.expander("📊 Xem metadata chi tiết"):
-                metadata_file = Path(CONFIG["metadata_file"])
                 if metadata_file.exists():
-                    with open(metadata_file, 'r') as f:
-                        metadata = json.load(f)
                     st.json(metadata)
             
             # Download section
@@ -141,9 +175,9 @@ def main():
 
                 # File search input
                 search_terms = st.text_input(
-                    "🔍 Tìm kiếm file theo tên (phân cách bằng dấu phẩy)",
+                    "🔍 Tìm kiếm file theo tên và URL (phân cách bằng dấu phẩy)",
                     placeholder="Ví dụ: catalog, manual, guide...",
-                    help="Nhập các từ khóa để tìm kiếm file ưu tiên"
+                    help="Tìm kiếm trong cả tên file và URL gốc. Ví dụ: 'catalog' sẽ tìm cả file có tên catalog và file có URL chứa catalog"
                 )
 
                 # Get all PDF files
@@ -160,7 +194,19 @@ def main():
                 if search_keywords:
                     for pdf_file in pdf_files:
                         file_name_lower = pdf_file.name.lower()
-                        if any(keyword in file_name_lower for keyword in search_keywords):
+
+                        # Get original URL for this file
+                        original_url = ""
+                        for url, filepath in url_mapping.items():
+                            if Path(filepath).name == pdf_file.name:
+                                original_url = url.lower()
+                                break
+
+                        # Search in both filename and original URL
+                        name_match = any(keyword in file_name_lower for keyword in search_keywords)
+                        url_match = any(keyword in original_url for keyword in search_keywords) if original_url else False
+
+                        if name_match or url_match:
                             priority_files.append(pdf_file)
                         else:
                             other_files.append(pdf_file)
@@ -176,12 +222,21 @@ def main():
                 if priority_files:
                     st.markdown("### ⭐ File Ưu Tiên (khớp tìm kiếm)")
                     for pdf_file in priority_files:
+                        # Get original URL for this file
+                        original_url = ""
+                        for url, filepath in url_mapping.items():
+                            if Path(filepath).name == pdf_file.name:
+                                original_url = url
+                                break
+
                         col1, col2 = st.columns([0.05, 0.95])
                         with col1:
                             if st.checkbox("", key=f"priority_{pdf_file}"):
                                 selected_files.append(pdf_file)
                         with col2:
                             st.text(f"🎯 {pdf_file.relative_to(output_dir)}")
+                            if original_url:
+                                st.caption(f"🔗 {original_url[:80]}{'...' if len(original_url) > 80 else ''}")
 
                 # Other files section
                 if other_files:
@@ -195,12 +250,21 @@ def main():
                     for i in range(0, len(other_files), batch_size):
                         batch = other_files[i:i+batch_size]
                         for pdf_file in batch:
+                            # Get original URL for this file
+                            original_url = ""
+                            for url, filepath in url_mapping.items():
+                                if Path(filepath).name == pdf_file.name:
+                                    original_url = url
+                                    break
+
                             col1, col2 = st.columns([0.05, 0.95])
                             with col1:
                                 if st.checkbox("", key=f"other_{pdf_file}_{i}"):
                                     selected_files.append(pdf_file)
                             with col2:
                                 st.text(f"📄 {pdf_file.relative_to(output_dir)}")
+                                if original_url:
+                                    st.caption(f"🔗 {original_url[:80]}{'...' if len(original_url) > 80 else ''}")
 
                 # Summary of selected files
                 if selected_files:

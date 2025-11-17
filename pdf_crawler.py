@@ -24,15 +24,23 @@ CONFIG = {
     "progress_file": "pdf_crawler_progress.json",
 }
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(CONFIG["log_file"]),
-        logging.StreamHandler()
-    ]
-)
+# Configure logging with duplicate prevention
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# Only add handlers if they don't already exist
+if not logger.handlers:
+    formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    
+    # File handler
+    file_handler = logging.FileHandler(CONFIG["log_file"])
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Stream handler
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
 
 
 class PDFCrawler:
@@ -100,11 +108,19 @@ class PDFCrawler:
             logger.debug(f"Error fetching {url}: {e}")
             return ""
 
-    async def download_pdf(self, session: aiohttp.ClientSession, pdf_url: str, source_site: str) -> bool:
+    async def download_pdf(self, session: aiohttp.ClientSession, pdf_url: str, source_site: str, semaphore: asyncio.Semaphore = None) -> bool:
         if pdf_url in self.downloaded_pdfs:
             logger.debug(f"Already downloaded: {pdf_url}")
             return True
 
+        # Acquire semaphore to limit concurrent downloads
+        if semaphore:
+            async with semaphore:
+                return await self._download_pdf_impl(session, pdf_url, source_site)
+        else:
+            return await self._download_pdf_impl(session, pdf_url, source_site)
+    
+    async def _download_pdf_impl(self, session: aiohttp.ClientSession, pdf_url: str, source_site: str) -> bool:
         try:
             site_domain = urlparse(source_site).netloc.replace('www.', '')
             site_dir = self.output_dir / site_domain
@@ -268,10 +284,11 @@ class PDFCrawler:
         logger.info(f"Found {len(pdf_links)} PDFs on {start_url} (crawled {pages_crawled} pages)")
         self.metadata["pdfs_found"] += len(pdf_links)
 
-        download_tasks = []
-        for pdf_url in pdf_links:
-            async with semaphore:
-                download_tasks.append(self.download_pdf(session, pdf_url, start_url))
+        # Download PDFs with proper semaphore usage
+        download_tasks = [
+            self.download_pdf(session, pdf_url, start_url, semaphore)
+            for pdf_url in pdf_links
+        ]
 
         if download_tasks:
             await asyncio.gather(*download_tasks)
